@@ -27,8 +27,23 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         b.Entity<Ingredient>().Property(x => x.CostPerUnit).HasPrecision(12, 4);
         b.Entity<Recipe>().HasKey(x => new { x.ProductId, x.IngredientId });
         b.Entity<Recipe>().Property(x => x.Quantity).HasPrecision(14, 3);
-        b.Entity<StockMovement>().Property(x => x.Quantity).HasPrecision(14, 3);
-        b.Entity<StockMovement>().HasIndex(x => new { x.RestaurantId, x.IngredientId, x.CreatedAt });
+
+        b.Entity<StockMovement>(entity =>
+        {
+            entity.ToTable("stock_movements");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.RestaurantId).HasColumnName("restaurant_id");
+            entity.Property(x => x.IngredientId).HasColumnName("ingredient_id");
+            entity.Property(x => x.OrderId).HasColumnName("order_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(20).IsRequired();
+            entity.Property(x => x.Quantity).HasColumnName("quantity").HasPrecision(14, 3);
+            entity.Property(x => x.Description).HasColumnName("description").HasMaxLength(240).IsRequired();
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(x => new { x.RestaurantId, x.IngredientId, x.CreatedAt })
+                .HasDatabaseName("idx_stock_movements_restaurant_ingredient_date");
+        });
+
         b.Entity<Order>().Property(x => x.Total).HasPrecision(12, 2);
         b.Entity<OrderItem>().Property(x => x.UnitPrice).HasPrecision(12, 2);
         b.Entity<CashMovement>().Property(x => x.Amount).HasPrecision(12, 2);
