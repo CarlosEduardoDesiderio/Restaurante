@@ -19,14 +19,76 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
 
     protected override void OnModelCreating(ModelBuilder b)
     {
-        b.Entity<AppUser>().HasIndex(x => x.Email).IsUnique();
-        b.Entity<RestaurantTable>().HasIndex(x => new { x.RestaurantId, x.Number }).IsUnique();
-        b.Entity<Product>().Property(x => x.Price).HasPrecision(12, 2);
-        b.Entity<Ingredient>().Property(x => x.CurrentQuantity).HasPrecision(14, 3);
-        b.Entity<Ingredient>().Property(x => x.MinimumQuantity).HasPrecision(14, 3);
-        b.Entity<Ingredient>().Property(x => x.CostPerUnit).HasPrecision(12, 4);
-        b.Entity<Recipe>().HasKey(x => new { x.ProductId, x.IngredientId });
-        b.Entity<Recipe>().Property(x => x.Quantity).HasPrecision(14, 3);
+        b.Entity<Restaurant>(entity =>
+        {
+            entity.ToTable("restaurants");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(160).IsRequired();
+            entity.Property(x => x.Document).HasColumnName("document").HasMaxLength(30);
+            entity.Property(x => x.Active).HasColumnName("active");
+        });
+
+        b.Entity<AppUser>(entity =>
+        {
+            entity.ToTable("users");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.RestaurantId).HasColumnName("restaurant_id");
+            entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(120).IsRequired();
+            entity.Property(x => x.Email).HasColumnName("email").HasMaxLength(180).IsRequired();
+            entity.Property(x => x.PasswordHash).HasColumnName("password_hash").IsRequired();
+            entity.Property(x => x.Role).HasColumnName("role").HasMaxLength(30).IsRequired();
+            entity.Property(x => x.Active).HasColumnName("active");
+            entity.HasIndex(x => x.Email).IsUnique().HasDatabaseName("users_email_key");
+            entity.HasOne(x => x.Restaurant).WithMany().HasForeignKey(x => x.RestaurantId);
+        });
+
+        b.Entity<Category>(entity =>
+        {
+            entity.ToTable("categories");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.RestaurantId).HasColumnName("restaurant_id");
+            entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Active).HasColumnName("active");
+        });
+
+        b.Entity<Product>(entity =>
+        {
+            entity.ToTable("products");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.RestaurantId).HasColumnName("restaurant_id");
+            entity.Property(x => x.CategoryId).HasColumnName("category_id");
+            entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(160).IsRequired();
+            entity.Property(x => x.Description).HasColumnName("description");
+            entity.Property(x => x.Price).HasColumnName("price").HasPrecision(12, 2);
+            entity.Property(x => x.Active).HasColumnName("active");
+        });
+
+        b.Entity<Ingredient>(entity =>
+        {
+            entity.ToTable("ingredients");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.RestaurantId).HasColumnName("restaurant_id");
+            entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(160).IsRequired();
+            entity.Property(x => x.Unit).HasColumnName("unit").HasMaxLength(20).IsRequired();
+            entity.Property(x => x.CurrentQuantity).HasColumnName("current_quantity").HasPrecision(14, 3);
+            entity.Property(x => x.MinimumQuantity).HasColumnName("minimum_quantity").HasPrecision(14, 3);
+            entity.Property(x => x.CostPerUnit).HasColumnName("cost_per_unit").HasPrecision(12, 4);
+            entity.Property(x => x.ExpirationDate).HasColumnName("expiration_date");
+        });
+
+        b.Entity<Recipe>(entity =>
+        {
+            entity.ToTable("recipes");
+            entity.HasKey(x => new { x.ProductId, x.IngredientId });
+            entity.Property(x => x.ProductId).HasColumnName("product_id");
+            entity.Property(x => x.IngredientId).HasColumnName("ingredient_id");
+            entity.Property(x => x.Quantity).HasColumnName("quantity").HasPrecision(14, 3);
+        });
 
         b.Entity<StockMovement>(entity =>
         {
@@ -44,9 +106,60 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
                 .HasDatabaseName("idx_stock_movements_restaurant_ingredient_date");
         });
 
-        b.Entity<Order>().Property(x => x.Total).HasPrecision(12, 2);
-        b.Entity<OrderItem>().Property(x => x.UnitPrice).HasPrecision(12, 2);
-        b.Entity<CashMovement>().Property(x => x.Amount).HasPrecision(12, 2);
-        b.Entity<AppUser>().HasOne(x => x.Restaurant).WithMany().HasForeignKey(x => x.RestaurantId);
+        b.Entity<RestaurantTable>(entity =>
+        {
+            entity.ToTable("restaurant_tables");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.RestaurantId).HasColumnName("restaurant_id");
+            entity.Property(x => x.Number).HasColumnName("number");
+            entity.Property(x => x.Seats).HasColumnName("seats");
+            entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(30).IsRequired();
+            entity.HasIndex(x => new { x.RestaurantId, x.Number })
+                .IsUnique()
+                .HasDatabaseName("restaurant_tables_restaurant_id_number_key");
+        });
+
+        b.Entity<Order>(entity =>
+        {
+            entity.ToTable("orders");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.RestaurantId).HasColumnName("restaurant_id");
+            entity.Property(x => x.TableId).HasColumnName("table_id");
+            entity.Property(x => x.UserId).HasColumnName("user_id");
+            entity.Property(x => x.CustomerName).HasColumnName("customer_name").HasMaxLength(160);
+            entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(30).IsRequired();
+            entity.Property(x => x.PaymentMethod).HasColumnName("payment_method").HasMaxLength(30);
+            entity.Property(x => x.Total).HasColumnName("total").HasPrecision(12, 2);
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.Property(x => x.ClosedAt).HasColumnName("closed_at");
+            entity.HasMany(x => x.Items).WithOne().HasForeignKey(x => x.OrderId);
+        });
+
+        b.Entity<OrderItem>(entity =>
+        {
+            entity.ToTable("order_items");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.OrderId).HasColumnName("order_id");
+            entity.Property(x => x.ProductId).HasColumnName("product_id");
+            entity.Property(x => x.Quantity).HasColumnName("quantity");
+            entity.Property(x => x.UnitPrice).HasColumnName("unit_price").HasPrecision(12, 2);
+            entity.Property(x => x.Notes).HasColumnName("notes");
+        });
+
+        b.Entity<CashMovement>(entity =>
+        {
+            entity.ToTable("cash_movements");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.RestaurantId).HasColumnName("restaurant_id");
+            entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(20).IsRequired();
+            entity.Property(x => x.Description).HasColumnName("description").HasMaxLength(240).IsRequired();
+            entity.Property(x => x.Amount).HasColumnName("amount").HasPrecision(12, 2);
+            entity.Property(x => x.PaymentMethod).HasColumnName("payment_method").HasMaxLength(30);
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+        });
     }
 }
