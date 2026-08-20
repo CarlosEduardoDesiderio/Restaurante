@@ -47,8 +47,6 @@ using (var scope = app.Services.CreateScope())
 
     if (!await db.Restaurants.AnyAsync())
     {
-        // Salva primeiro o restaurante para satisfazer as FKs de categories,
-        // products, tables, users e ingredients no banco PostgreSQL existente.
         demoRestaurant = new Restaurant { Name = "Restaurante Demonstração" };
         db.Restaurants.Add(demoRestaurant);
         await db.SaveChangesAsync();
@@ -71,7 +69,6 @@ using (var scope = app.Services.CreateScope())
         demoRestaurant = await db.Restaurants.OrderBy(x => x.Id).FirstAsync();
     }
 
-    // Credenciais de demonstração somente no ambiente de desenvolvimento.
     if (app.Environment.IsDevelopment())
     {
         var demoAdmin = await db.Users.SingleOrDefaultAsync(x => x.Email == "admin@demo.local");
@@ -127,6 +124,46 @@ using (var scope = app.Services.CreateScope())
     if (missingIngredients.Count > 0)
     {
         db.Ingredients.AddRange(missingIngredients);
+        await db.SaveChangesAsync();
+    }
+
+    // Em desenvolvimento, deixa os produtos demo prontos para testar o fluxo
+    // Pedido -> Estoque -> Cozinha -> Pagamento sem montagem manual inicial.
+    if (app.Environment.IsDevelopment())
+    {
+        var ingredientsByName = await db.Ingredients
+            .Where(x => x.RestaurantId == demoRestaurant.Id)
+            .ToDictionaryAsync(x => x.Name, StringComparer.OrdinalIgnoreCase);
+
+        var hamburger = await db.Products
+            .SingleOrDefaultAsync(x => x.RestaurantId == demoRestaurant.Id && x.Name == "Hambúrguer Artesanal");
+        if (hamburger is not null && !await db.Recipes.AnyAsync(x => x.ProductId == hamburger.Id))
+        {
+            var hamburgerRecipe = new (string Name, decimal Quantity)[]
+            {
+                ("Pão de hambúrguer", 1m),
+                ("Carne bovina", 180m),
+                ("Queijo", 20m),
+                ("Molho especial", 15m),
+                ("Alface", 15m),
+                ("Tomate", 30m)
+            };
+
+            foreach (var item in hamburgerRecipe)
+            {
+                if (ingredientsByName.TryGetValue(item.Name, out var ingredient))
+                    db.Recipes.Add(new Recipe { ProductId = hamburger.Id, IngredientId = ingredient.Id, Quantity = item.Quantity });
+            }
+        }
+
+        var soda = await db.Products
+            .SingleOrDefaultAsync(x => x.RestaurantId == demoRestaurant.Id && x.Name == "Refrigerante");
+        if (soda is not null && !await db.Recipes.AnyAsync(x => x.ProductId == soda.Id)
+            && ingredientsByName.TryGetValue("Refrigerante lata", out var sodaIngredient))
+        {
+            db.Recipes.Add(new Recipe { ProductId = soda.Id, IngredientId = sodaIngredient.Id, Quantity = 1m });
+        }
+
         await db.SaveChangesAsync();
     }
 }
