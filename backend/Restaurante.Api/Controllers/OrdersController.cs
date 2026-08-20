@@ -68,6 +68,7 @@ public class OrdersController(AppDbContext db) : ControllerBase
             RestaurantId = RestaurantId,
             TableId = req.TableId,
             CustomerName = req.CustomerName,
+            Status = "NEW",
             UserId = Guid.TryParse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var uid) ? uid : null
         };
 
@@ -110,6 +111,32 @@ public class OrdersController(AppDbContext db) : ControllerBase
         return Created($"/api/orders/{order.Id}", order);
     }
 
+    [HttpPatch("{id:guid}/status")]
+    public async Task<IActionResult> UpdateStatus(Guid id, UpdateOrderStatusRequest req)
+    {
+        var order = await db.Orders.SingleOrDefaultAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
+        if (order is null) return NotFound();
+        if (order.Status is "CLOSED" or "CANCELLED")
+            return BadRequest(new { message = "Pedido finalizado não pode mudar de status." });
+
+        var requested = req.Status.Trim().ToUpperInvariant();
+        var current = order.Status == "OPEN" ? "NEW" : order.Status;
+        var allowedNext = current switch
+        {
+            "NEW" => "PREPARING",
+            "PREPARING" => "READY",
+            "READY" => "DELIVERED",
+            _ => null
+        };
+
+        if (allowedNext is null || requested != allowedNext)
+            return BadRequest(new { message = $"Transição inválida. Status atual: {current}. Próximo status permitido: {allowedNext ?? "nenhum"}." });
+
+        order.Status = requested;
+        await db.SaveChangesAsync();
+        return Ok(order);
+    }
+
     [HttpPost("{id:guid}/close")]
     public async Task<IActionResult> Close(Guid id, CloseOrderRequest req)
     {
@@ -117,6 +144,7 @@ public class OrdersController(AppDbContext db) : ControllerBase
         if (order is null) return NotFound();
         if (order.Status == "CLOSED") return BadRequest(new { message = "Pedido já fechado." });
         if (order.Status == "CANCELLED") return BadRequest(new { message = "Pedido cancelado não pode ser fechado." });
+        if (order.Status != "DELIVERED") return BadRequest(new { message = "O pedido precisa estar ENTREGUE antes do fechamento." });
 
         order.Status = "CLOSED";
         order.PaymentMethod = req.PaymentMethod;
@@ -182,4 +210,5 @@ public class OrdersController(AppDbContext db) : ControllerBase
 
 public record CreateOrderRequest(Guid? TableId, string? CustomerName, List<CreateOrderItem> Items);
 public record CreateOrderItem(Guid ProductId, int Quantity, string? Notes);
+public record UpdateOrderStatusRequest(string Status);
 public record CloseOrderRequest(string PaymentMethod);
