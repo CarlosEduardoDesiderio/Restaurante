@@ -131,3 +131,18 @@ public class CashMovement
     public string? PaymentMethod { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
+
+public class FinancialEntry
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RestaurantId { get; set; }
+    public string Type { get; set; } = "PAYABLE";
+    public string Category { get; set; } = "OUTROS";
+    public string Description { get; set; } = "";
+    public decimal Amount { get; set; }
+    public DateTime DueDate { get; set; }
+    public string Status { get; set; } = "PENDING";
+    public string? PaymentMethod { get; set; }
+    public DateTime? PaidAt { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
