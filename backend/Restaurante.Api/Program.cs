@@ -47,8 +47,12 @@ using (var scope = app.Services.CreateScope())
 
     if (!await db.Restaurants.AnyAsync())
     {
+        // Salva primeiro o restaurante para satisfazer as FKs de categories,
+        // products, tables, users e ingredients no banco PostgreSQL existente.
         demoRestaurant = new Restaurant { Name = "Restaurante Demonstração" };
         db.Restaurants.Add(demoRestaurant);
+        await db.SaveChangesAsync();
+
         db.Categories.AddRange(
             new Category { RestaurantId = demoRestaurant.Id, Name = "Hambúrgueres" },
             new Category { RestaurantId = demoRestaurant.Id, Name = "Bebidas" }
