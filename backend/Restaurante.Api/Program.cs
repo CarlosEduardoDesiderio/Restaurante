@@ -19,12 +19,23 @@ builder.Services.AddCors(o => o.AddPolicy("frontend", p => p.AllowAnyOrigin().Al
 var key = Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"] ?? "development-only-change-this-secret-very-long-key");
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
 {
-    o.TokenValidationParameters = new TokenValidationParameters { ValidateIssuerSigningKey = true, IssuerSigningKey = new SymmetricSecurityKey(key), ValidateIssuer = false, ValidateAudience = false };
+    o.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(key),
+        ValidateIssuer = false,
+        ValidateAudience = false
+    };
 });
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
-app.UseSwagger(); app.UseSwaggerUI(); app.UseCors("frontend"); app.UseAuthentication(); app.UseAuthorization(); app.MapControllers();
+app.UseSwagger();
+app.UseSwaggerUI();
+app.UseCors("frontend");
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
 app.MapGet("/health", () => Results.Ok(new { status = "UP", version = "1.0.0" }));
 
 using (var scope = app.Services.CreateScope())
@@ -32,26 +43,58 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.EnsureCreatedAsync();
 
+    Restaurant demoRestaurant;
+
     if (!await db.Restaurants.AnyAsync())
     {
-        var restaurant = new Restaurant { Name = "Restaurante Demonstração" };
-        db.Restaurants.Add(restaurant);
-        db.Users.Add(new AppUser { RestaurantId = restaurant.Id, Name = "Administrador", Email = "admin@demo.local", Role = "ADMIN", PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin@123") });
+        demoRestaurant = new Restaurant { Name = "Restaurante Demonstração" };
+        db.Restaurants.Add(demoRestaurant);
         db.Categories.AddRange(
-            new Category { RestaurantId = restaurant.Id, Name = "Hambúrgueres" },
-            new Category { RestaurantId = restaurant.Id, Name = "Bebidas" }
+            new Category { RestaurantId = demoRestaurant.Id, Name = "Hambúrgueres" },
+            new Category { RestaurantId = demoRestaurant.Id, Name = "Bebidas" }
         );
         db.Products.AddRange(
-            new Product { RestaurantId = restaurant.Id, Name = "Hambúrguer Artesanal", Description = "Pão, carne, queijo e molho", Price = 29.90m },
-            new Product { RestaurantId = restaurant.Id, Name = "Refrigerante", Price = 7.00m }
+            new Product { RestaurantId = demoRestaurant.Id, Name = "Hambúrguer Artesanal", Description = "Pão, carne, queijo e molho", Price = 29.90m },
+            new Product { RestaurantId = demoRestaurant.Id, Name = "Refrigerante", Price = 7.00m }
         );
         for (var i = 1; i <= 12; i++)
-            db.Tables.Add(new RestaurantTable { RestaurantId = restaurant.Id, Number = i, Seats = 4 });
+            db.Tables.Add(new RestaurantTable { RestaurantId = demoRestaurant.Id, Number = i, Seats = 4 });
+
+        await db.SaveChangesAsync();
+    }
+    else
+    {
+        demoRestaurant = await db.Restaurants.OrderBy(x => x.Id).FirstAsync();
+    }
+
+    // Credenciais de demonstração somente no ambiente de desenvolvimento.
+    if (app.Environment.IsDevelopment())
+    {
+        var demoAdmin = await db.Users.SingleOrDefaultAsync(x => x.Email == "admin@demo.local");
+        if (demoAdmin is null)
+        {
+            db.Users.Add(new AppUser
+            {
+                RestaurantId = demoRestaurant.Id,
+                Name = "Administrador",
+                Email = "admin@demo.local",
+                Role = "ADMIN",
+                Active = true,
+                PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin@123")
+            });
+        }
+        else
+        {
+            demoAdmin.RestaurantId = demoRestaurant.Id;
+            demoAdmin.Name = "Administrador";
+            demoAdmin.Role = "ADMIN";
+            demoAdmin.Active = true;
+            demoAdmin.PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin@123");
+        }
 
         await db.SaveChangesAsync();
     }
 
-    var demoRestaurant = await db.Restaurants.OrderBy(x => x.Id).FirstAsync();
     var existingIngredientNames = await db.Ingredients
         .Where(x => x.RestaurantId == demoRestaurant.Id)
         .Select(x => x.Name)
