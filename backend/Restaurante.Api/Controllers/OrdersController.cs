@@ -22,8 +22,7 @@ public class OrdersController(AppDbContext db) : ControllerBase
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var order = await db.Orders
-            .Include(x => x.Items)
+        var order = await db.Orders.Include(x => x.Items)
             .SingleOrDefaultAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
         return order is null ? NotFound() : Ok(order);
     }
@@ -160,7 +159,8 @@ public class OrdersController(AppDbContext db) : ControllerBase
     [HttpPost("{id:guid}/close")]
     public async Task<IActionResult> Close(Guid id, CloseOrderRequest req)
     {
-        var order = await db.Orders.Include(x => x.Items).SingleOrDefaultAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
+        var order = await db.Orders.Include(x => x.Items)
+            .SingleOrDefaultAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
         if (order is null) return NotFound();
         if (order.Status == "CLOSED") return BadRequest(new { message = "Pedido já fechado." });
         if (order.Status == "CANCELLED") return BadRequest(new { message = "Pedido cancelado não pode ser fechado." });
@@ -171,6 +171,13 @@ public class OrdersController(AppDbContext db) : ControllerBase
         if (!allowedPaymentMethods.Contains(paymentMethod))
             return BadRequest(new { message = "Forma de pagamento inválida. Use PIX, CARD ou CASH." });
 
+        var cashSession = await db.CashSessions
+            .Where(x => x.RestaurantId == RestaurantId && x.Status == "OPEN")
+            .OrderByDescending(x => x.OpenedAt)
+            .FirstOrDefaultAsync();
+        if (cashSession is null)
+            return Conflict(new { message = "Abra o caixa antes de receber pagamentos." });
+
         await using var transaction = await db.Database.BeginTransactionAsync();
         order.Status = "CLOSED";
         order.PaymentMethod = paymentMethod;
@@ -178,11 +185,14 @@ public class OrdersController(AppDbContext db) : ControllerBase
         db.CashMovements.Add(new CashMovement
         {
             RestaurantId = RestaurantId,
+            CashSessionId = cashSession.Id,
+            OrderId = order.Id,
             Type = "IN",
-            Description = $"Pedido {order.Id}",
+            Description = $"Pagamento do pedido {order.Id}",
             Amount = order.Total,
             PaymentMethod = paymentMethod
         });
+
         if (order.TableId is Guid tid)
         {
             var table = await db.Tables.SingleOrDefaultAsync(x => x.Id == tid && x.RestaurantId == RestaurantId);
@@ -202,10 +212,6 @@ public class OrdersController(AppDbContext db) : ControllerBase
         if (order.Status == "CANCELLED") return BadRequest(new { message = "Pedido já cancelado." });
 
         await using var transaction = await db.Database.BeginTransactionAsync();
-
-        // Só devolve ingredientes ao estoque quando a produção ainda não começou.
-        // Depois de PREPARING, os insumos já foram consumidos fisicamente e não
-        // podem ser reincorporados ao estoque apenas porque o pedido foi cancelado.
         var restoreStock = order.Status is "NEW" or "OPEN";
         if (restoreStock)
         {
