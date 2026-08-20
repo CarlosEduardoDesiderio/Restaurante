@@ -50,6 +50,8 @@ public class CashController(AppDbContext db) : ControllerBase
         var alreadyOpen = await db.CashSessions.AnyAsync(x => x.RestaurantId == RestaurantId && x.Status == "OPEN");
         if (alreadyOpen) return Conflict(new { message = "Já existe um caixa aberto para este restaurante." });
 
+        await using var transaction = await db.Database.BeginTransactionAsync();
+
         var session = new CashSession
         {
             RestaurantId = RestaurantId,
@@ -57,7 +59,11 @@ public class CashController(AppDbContext db) : ControllerBase
             OpeningAmount = req.OpeningAmount,
             Status = "OPEN"
         };
+
+        // Persiste a sessão antes de qualquer movimento que a referencie.
+        // Isso evita violação da FK cash_movements_cash_session_id_fkey.
         db.CashSessions.Add(session);
+        await db.SaveChangesAsync();
 
         if (req.OpeningAmount > 0)
         {
@@ -70,9 +76,10 @@ public class CashController(AppDbContext db) : ControllerBase
                 Amount = req.OpeningAmount,
                 PaymentMethod = "CASH"
             });
+            await db.SaveChangesAsync();
         }
 
-        await db.SaveChangesAsync();
+        await transaction.CommitAsync();
         return Ok(await BuildSummary(session));
     }
 
