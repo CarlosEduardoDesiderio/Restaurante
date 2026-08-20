@@ -58,6 +58,18 @@ public class Recipe
     public decimal Quantity { get; set; }
 }
 
+public class StockMovement
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RestaurantId { get; set; }
+    public Guid IngredientId { get; set; }
+    public Guid? OrderId { get; set; }
+    public string Type { get; set; } = "OUT";
+    public decimal Quantity { get; set; }
+    public string Description { get; set; } = "";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
 public class RestaurantTable
 {
     public Guid Id { get; set; } = Guid.NewGuid();
