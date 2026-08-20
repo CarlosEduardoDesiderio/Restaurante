@@ -15,6 +15,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<RestaurantTable> Tables => Set<RestaurantTable>();
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
+    public DbSet<CashSession> CashSessions => Set<CashSession>();
     public DbSet<CashMovement> CashMovements => Set<CashMovement>();
 
     protected override void OnModelCreating(ModelBuilder b)
@@ -149,17 +150,38 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.Property(x => x.Notes).HasColumnName("notes");
         });
 
+        b.Entity<CashSession>(entity =>
+        {
+            entity.ToTable("cash_sessions");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.RestaurantId).HasColumnName("restaurant_id");
+            entity.Property(x => x.OpenedByUserId).HasColumnName("opened_by_user_id");
+            entity.Property(x => x.ClosedByUserId).HasColumnName("closed_by_user_id");
+            entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(20).IsRequired();
+            entity.Property(x => x.OpeningAmount).HasColumnName("opening_amount").HasPrecision(12, 2);
+            entity.Property(x => x.ExpectedCashAmount).HasColumnName("expected_cash_amount").HasPrecision(12, 2);
+            entity.Property(x => x.CountedCashAmount).HasColumnName("counted_cash_amount").HasPrecision(12, 2);
+            entity.Property(x => x.DifferenceAmount).HasColumnName("difference_amount").HasPrecision(12, 2);
+            entity.Property(x => x.OpenedAt).HasColumnName("opened_at");
+            entity.Property(x => x.ClosedAt).HasColumnName("closed_at");
+            entity.HasIndex(x => new { x.RestaurantId, x.Status }).HasDatabaseName("idx_cash_sessions_restaurant_status");
+        });
+
         b.Entity<CashMovement>(entity =>
         {
             entity.ToTable("cash_movements");
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Id).HasColumnName("id");
             entity.Property(x => x.RestaurantId).HasColumnName("restaurant_id");
+            entity.Property(x => x.CashSessionId).HasColumnName("cash_session_id");
+            entity.Property(x => x.OrderId).HasColumnName("order_id");
             entity.Property(x => x.Type).HasColumnName("type").HasMaxLength(20).IsRequired();
             entity.Property(x => x.Description).HasColumnName("description").HasMaxLength(240).IsRequired();
             entity.Property(x => x.Amount).HasColumnName("amount").HasPrecision(12, 2);
             entity.Property(x => x.PaymentMethod).HasColumnName("payment_method").HasMaxLength(30);
             entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(x => new { x.RestaurantId, x.CashSessionId, x.CreatedAt }).HasDatabaseName("idx_cash_movements_session_date");
         });
     }
 }
