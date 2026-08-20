@@ -11,6 +11,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Product> Products => Set<Product>();
     public DbSet<Ingredient> Ingredients => Set<Ingredient>();
     public DbSet<Recipe> Recipes => Set<Recipe>();
+    public DbSet<StockMovement> StockMovements => Set<StockMovement>();
     public DbSet<RestaurantTable> Tables => Set<RestaurantTable>();
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
@@ -25,6 +26,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
         b.Entity<Ingredient>().Property(x => x.MinimumQuantity).HasPrecision(14, 3);
         b.Entity<Ingredient>().Property(x => x.CostPerUnit).HasPrecision(12, 4);
         b.Entity<Recipe>().HasKey(x => new { x.ProductId, x.IngredientId });
+        b.Entity<Recipe>().Property(x => x.Quantity).HasPrecision(14, 3);
+        b.Entity<StockMovement>().Property(x => x.Quantity).HasPrecision(14, 3);
+        b.Entity<StockMovement>().HasIndex(x => new { x.RestaurantId, x.IngredientId, x.CreatedAt });
         b.Entity<Order>().Property(x => x.Total).HasPrecision(12, 2);
         b.Entity<OrderItem>().Property(x => x.UnitPrice).HasPrecision(12, 2);
         b.Entity<CashMovement>().Property(x => x.Amount).HasPrecision(12, 2);
