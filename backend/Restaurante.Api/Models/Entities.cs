@@ -104,10 +104,27 @@ public class OrderItem
     public string? Notes { get; set; }
 }
 
+public class CashSession
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RestaurantId { get; set; }
+    public Guid OpenedByUserId { get; set; }
+    public Guid? ClosedByUserId { get; set; }
+    public string Status { get; set; } = "OPEN";
+    public decimal OpeningAmount { get; set; }
+    public decimal? ExpectedCashAmount { get; set; }
+    public decimal? CountedCashAmount { get; set; }
+    public decimal? DifferenceAmount { get; set; }
+    public DateTime OpenedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? ClosedAt { get; set; }
+}
+
 public class CashMovement
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid RestaurantId { get; set; }
+    public Guid? CashSessionId { get; set; }
+    public Guid? OrderId { get; set; }
     public string Type { get; set; } = "IN";
     public string Description { get; set; } = "";
     public decimal Amount { get; set; }
