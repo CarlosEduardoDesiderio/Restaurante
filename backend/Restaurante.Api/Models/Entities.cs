@@ -129,10 +129,15 @@ public class Order
     public Guid? TableId { get; set; }
     public Guid? UserId { get; set; }
     public Guid? CustomerId { get; set; }
+    public Guid? CouponId { get; set; }
     public string? CustomerName { get; set; }
     public string Status { get; set; } = "OPEN";
     public string? PaymentMethod { get; set; }
     public decimal Total { get; set; }
+    public decimal? OriginalTotal { get; set; }
+    public decimal DiscountAmount { get; set; }
+    public decimal CashbackUsed { get; set; }
+    public string? CouponCode { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? ClosedAt { get; set; }
     public List<OrderItem> Items { get; set; } = [];
