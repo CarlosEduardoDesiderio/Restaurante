@@ -108,6 +108,11 @@ using (var scope = app.Services.CreateScope())
         );
 
         ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_id UUID NULL REFERENCES customers(id) ON DELETE SET NULL;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS coupon_id UUID NULL REFERENCES coupons(id) ON DELETE SET NULL;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS original_total NUMERIC(12,2);
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12,2) NOT NULL DEFAULT 0;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS cashback_used NUMERIC(12,2) NOT NULL DEFAULT 0;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS coupon_code VARCHAR(40);
         CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(restaurant_id, customer_id, created_at);
         """);
 
