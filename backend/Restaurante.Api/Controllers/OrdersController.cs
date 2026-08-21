@@ -186,30 +186,97 @@ public class OrdersController(AppDbContext db) : ControllerBase
         if (cashSession is null)
             return Conflict(new { message = "Abra o caixa antes de receber pagamentos." });
 
+        Customer? customer = null;
+        if (order.CustomerId is Guid customerId)
+            customer = await db.Customers.SingleOrDefaultAsync(x => x.Id == customerId && x.RestaurantId == RestaurantId && x.Active);
+
+        var originalTotal = order.Total;
+        var discountAmount = 0m;
+        Coupon? coupon = null;
+
+        if (!string.IsNullOrWhiteSpace(req.CouponCode))
+        {
+            var code = req.CouponCode.Trim().ToUpperInvariant();
+            coupon = await db.Coupons.SingleOrDefaultAsync(x => x.RestaurantId == RestaurantId && x.Code == code);
+            if (coupon is null || !coupon.Active)
+                return BadRequest(new { message = "Cupom inválido ou inativo." });
+            if (coupon.ExpiresAt is DateTime expiresAt && expiresAt < DateTime.UtcNow)
+                return BadRequest(new { message = "Este cupom está expirado." });
+            if (coupon.MaxUses is int maxUses && coupon.Uses >= maxUses)
+                return BadRequest(new { message = "Este cupom atingiu o limite de usos." });
+            if (originalTotal < coupon.MinimumOrderValue)
+                return BadRequest(new { message = $"Pedido mínimo para este cupom: R$ {coupon.MinimumOrderValue:N2}." });
+
+            discountAmount = coupon.DiscountType == "PERCENT"
+                ? Math.Round(originalTotal * (coupon.Value / 100m), 2, MidpointRounding.AwayFromZero)
+                : coupon.Value;
+            discountAmount = Math.Min(originalTotal, Math.Max(0, discountAmount));
+        }
+
+        var afterCoupon = Math.Max(0, originalTotal - discountAmount);
+        var requestedCashback = Math.Max(0, req.CashbackAmount ?? 0);
+        var cashbackUsed = 0m;
+
+        if (requestedCashback > 0)
+        {
+            if (customer is null)
+                return BadRequest(new { message = "Cashback só pode ser usado em pedidos vinculados a um cliente." });
+            if (requestedCashback > customer.CashbackBalance)
+                return BadRequest(new { message = $"Saldo de cashback insuficiente. Disponível: R$ {customer.CashbackBalance:N2}." });
+            cashbackUsed = Math.Min(afterCoupon, requestedCashback);
+        }
+
+        var amountToPay = Math.Max(0, afterCoupon - cashbackUsed);
+
         await using var transaction = await db.Database.BeginTransactionAsync();
+
+        order.OriginalTotal = originalTotal;
+        order.DiscountAmount = discountAmount;
+        order.CashbackUsed = cashbackUsed;
+        order.CouponId = coupon?.Id;
+        order.CouponCode = coupon?.Code;
+        order.Total = amountToPay;
         order.Status = "CLOSED";
         order.PaymentMethod = paymentMethod;
         order.ClosedAt = DateTime.UtcNow;
+
+        if (coupon is not null)
+            coupon.Uses += 1;
+
+        if (customer is not null && cashbackUsed > 0)
+        {
+            customer.CashbackBalance -= cashbackUsed;
+            db.LoyaltyMovements.Add(new LoyaltyMovement
+            {
+                RestaurantId = RestaurantId,
+                CustomerId = customer.Id,
+                OrderId = order.Id,
+                Type = "REDEEM",
+                Points = 0,
+                Cashback = -cashbackUsed,
+                Description = $"Cashback utilizado no pedido {order.Id}"
+            });
+        }
+
         db.CashMovements.Add(new CashMovement
         {
             RestaurantId = RestaurantId,
             CashSessionId = cashSession.Id,
             OrderId = order.Id,
             Type = "IN",
-            Description = $"Pagamento do pedido {order.Id}",
-            Amount = order.Total,
+            Description = $"Pagamento do pedido {order.Id}" + (discountAmount > 0 || cashbackUsed > 0 ? " com benefício CRM" : ""),
+            Amount = amountToPay,
             PaymentMethod = paymentMethod
         });
 
-        if (order.CustomerId is Guid customerId)
+        if (customer is not null)
         {
-            var customer = await db.Customers.SingleOrDefaultAsync(x => x.Id == customerId && x.RestaurantId == RestaurantId && x.Active);
-            if (customer is not null)
+            var earnedPoints = (int)Math.Floor(amountToPay);
+            var earnedCashback = Math.Round(amountToPay * 0.02m, 2, MidpointRounding.AwayFromZero);
+            customer.Points += earnedPoints;
+            customer.CashbackBalance += earnedCashback;
+            if (earnedPoints > 0 || earnedCashback > 0)
             {
-                var earnedPoints = (int)Math.Floor(order.Total);
-                var earnedCashback = Math.Round(order.Total * 0.02m, 2, MidpointRounding.AwayFromZero);
-                customer.Points += earnedPoints;
-                customer.CashbackBalance += earnedCashback;
                 db.LoyaltyMovements.Add(new LoyaltyMovement
                 {
                     RestaurantId = RestaurantId,
@@ -228,9 +295,28 @@ public class OrdersController(AppDbContext db) : ControllerBase
             var table = await db.Tables.SingleOrDefaultAsync(x => x.Id == tid && x.RestaurantId == RestaurantId);
             if (table != null) table.Status = "AVAILABLE";
         }
+
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
-        return Ok(order);
+
+        return Ok(new
+        {
+            order,
+            payment = new
+            {
+                originalTotal,
+                couponCode = coupon?.Code,
+                discountAmount,
+                cashbackUsed,
+                amountPaid = amountToPay,
+                paymentMethod
+            },
+            loyalty = customer is null ? null : new
+            {
+                customer.Points,
+                customer.CashbackBalance
+            }
+        });
     }
 
     [HttpPost("{id:guid}/cancel")]
@@ -293,4 +379,4 @@ public class OrdersController(AppDbContext db) : ControllerBase
 public record CreateOrderRequest(Guid? TableId, Guid? CustomerId, string? CustomerName, List<CreateOrderItem> Items);
 public record CreateOrderItem(Guid ProductId, int Quantity, string? Notes);
 public record UpdateOrderStatusRequest(string Status);
-public record CloseOrderRequest(string PaymentMethod);
+public record CloseOrderRequest(string PaymentMethod, string? CouponCode = null, decimal? CashbackAmount = null);
