@@ -43,8 +43,6 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.EnsureCreatedAsync();
 
-    // Enquanto o projeto ainda usa EnsureCreated em vez de EF Migrations,
-    // garante a evolução do banco existente sem apagar os dados locais.
     await db.Database.ExecuteSqlRawAsync("""
         CREATE TABLE IF NOT EXISTS cash_sessions (
             id UUID PRIMARY KEY,
@@ -65,6 +63,52 @@ using (var scope = app.Services.CreateScope())
         ALTER TABLE cash_movements ADD COLUMN IF NOT EXISTS order_id UUID NULL REFERENCES orders(id);
         CREATE INDEX IF NOT EXISTS idx_cash_movements_session_date
             ON cash_movements(restaurant_id, cash_session_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS customers (
+            id UUID PRIMARY KEY,
+            restaurant_id UUID NOT NULL REFERENCES restaurants(id),
+            name VARCHAR(160) NOT NULL,
+            phone VARCHAR(30),
+            email VARCHAR(180),
+            birth_date DATE,
+            points INTEGER NOT NULL DEFAULT 0,
+            cashback_balance NUMERIC(12,2) NOT NULL DEFAULT 0,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_customers_restaurant_phone ON customers(restaurant_id, phone);
+
+        CREATE TABLE IF NOT EXISTS loyalty_movements (
+            id UUID PRIMARY KEY,
+            restaurant_id UUID NOT NULL REFERENCES restaurants(id),
+            customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+            order_id UUID NULL REFERENCES orders(id) ON DELETE SET NULL,
+            type VARCHAR(20) NOT NULL,
+            points INTEGER NOT NULL DEFAULT 0,
+            cashback NUMERIC(12,2) NOT NULL DEFAULT 0,
+            description VARCHAR(240) NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_loyalty_customer_date ON loyalty_movements(restaurant_id, customer_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS coupons (
+            id UUID PRIMARY KEY,
+            restaurant_id UUID NOT NULL REFERENCES restaurants(id),
+            code VARCHAR(40) NOT NULL,
+            description VARCHAR(180) NOT NULL,
+            discount_type VARCHAR(20) NOT NULL,
+            value NUMERIC(12,2) NOT NULL,
+            minimum_order_value NUMERIC(12,2) NOT NULL DEFAULT 0,
+            max_uses INTEGER,
+            uses INTEGER NOT NULL DEFAULT 0,
+            expires_at TIMESTAMPTZ,
+            active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(restaurant_id, code)
+        );
+
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_id UUID NULL REFERENCES customers(id) ON DELETE SET NULL;
+        CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(restaurant_id, customer_id, created_at);
         """);
 
     Restaurant demoRestaurant;
@@ -116,7 +160,6 @@ using (var scope = app.Services.CreateScope())
             demoAdmin.Active = true;
             demoAdmin.PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin@123");
         }
-
         await db.SaveChangesAsync();
     }
 
@@ -163,28 +206,19 @@ using (var scope = app.Services.CreateScope())
         {
             var hamburgerRecipe = new (string Name, decimal Quantity)[]
             {
-                ("Pão de hambúrguer", 1m),
-                ("Carne bovina", 180m),
-                ("Queijo", 20m),
-                ("Molho especial", 15m),
-                ("Alface", 15m),
-                ("Tomate", 30m)
+                ("Pão de hambúrguer", 1m), ("Carne bovina", 180m), ("Queijo", 20m),
+                ("Molho especial", 15m), ("Alface", 15m), ("Tomate", 30m)
             };
-
             foreach (var item in hamburgerRecipe)
-            {
                 if (ingredientsByName.TryGetValue(item.Name, out var ingredient))
                     db.Recipes.Add(new Recipe { ProductId = hamburger.Id, IngredientId = ingredient.Id, Quantity = item.Quantity });
-            }
         }
 
         var soda = await db.Products
             .SingleOrDefaultAsync(x => x.RestaurantId == demoRestaurant.Id && x.Name == "Refrigerante");
         if (soda is not null && !await db.Recipes.AnyAsync(x => x.ProductId == soda.Id)
             && ingredientsByName.TryGetValue("Refrigerante lata", out var sodaIngredient))
-        {
             db.Recipes.Add(new Recipe { ProductId = soda.Id, IngredientId = sodaIngredient.Id, Quantity = 1m });
-        }
 
         await db.SaveChangesAsync();
     }
