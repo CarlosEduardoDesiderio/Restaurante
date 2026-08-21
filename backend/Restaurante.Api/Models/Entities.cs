@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations.Schema;
+
 namespace Restaurante.Api.Models;
 
 public class Restaurant
@@ -129,14 +131,19 @@ public class Order
     public Guid? TableId { get; set; }
     public Guid? UserId { get; set; }
     public Guid? CustomerId { get; set; }
+    [Column("coupon_id")]
     public Guid? CouponId { get; set; }
     public string? CustomerName { get; set; }
     public string Status { get; set; } = "OPEN";
     public string? PaymentMethod { get; set; }
     public decimal Total { get; set; }
+    [Column("original_total")]
     public decimal? OriginalTotal { get; set; }
+    [Column("discount_amount")]
     public decimal DiscountAmount { get; set; }
+    [Column("cashback_used")]
     public decimal CashbackUsed { get; set; }
+    [Column("coupon_code")]
     public string? CouponCode { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? ClosedAt { get; set; }
