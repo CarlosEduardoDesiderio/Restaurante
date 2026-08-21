@@ -10,6 +10,9 @@ namespace Restaurante.Api.Controllers;
 public class CustomersController(AppDbContext db) : ControllerBase
 {
     private Guid RestaurantId => Guid.Parse(User.FindFirst("restaurantId")!.Value);
+    private static DateTime? NormalizeBirthDate(DateTime? value) => value is null
+        ? null
+        : DateTime.SpecifyKind(value.Value.Date, DateTimeKind.Utc);
 
     [HttpGet]
     public async Task<IActionResult> List([FromQuery] string? search)
@@ -79,7 +82,7 @@ public class CustomersController(AppDbContext db) : ControllerBase
             Name = req.Name.Trim(),
             Phone = phone,
             Email = email,
-            BirthDate = req.BirthDate?.Date,
+            BirthDate = NormalizeBirthDate(req.BirthDate),
             Active = true
         };
         db.Customers.Add(customer);
@@ -97,7 +100,7 @@ public class CustomersController(AppDbContext db) : ControllerBase
         customer.Name = req.Name.Trim();
         customer.Phone = string.IsNullOrWhiteSpace(req.Phone) ? null : req.Phone.Trim();
         customer.Email = string.IsNullOrWhiteSpace(req.Email) ? null : req.Email.Trim().ToLowerInvariant();
-        customer.BirthDate = req.BirthDate?.Date;
+        customer.BirthDate = NormalizeBirthDate(req.BirthDate);
         customer.Active = req.Active;
         await db.SaveChangesAsync();
         return Ok(customer);
