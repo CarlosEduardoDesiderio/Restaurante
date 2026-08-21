@@ -79,12 +79,56 @@ public class RestaurantTable
     public string Status { get; set; } = "AVAILABLE";
 }
 
+public class Customer
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RestaurantId { get; set; }
+    public string Name { get; set; } = "";
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public DateTime? BirthDate { get; set; }
+    public int Points { get; set; }
+    public decimal CashbackBalance { get; set; }
+    public bool Active { get; set; } = true;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+public class LoyaltyMovement
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RestaurantId { get; set; }
+    public Guid CustomerId { get; set; }
+    public Guid? OrderId { get; set; }
+    public string Type { get; set; } = "EARN";
+    public int Points { get; set; }
+    public decimal Cashback { get; set; }
+    public string Description { get; set; } = "";
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+public class Coupon
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RestaurantId { get; set; }
+    public string Code { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string DiscountType { get; set; } = "PERCENT";
+    public decimal Value { get; set; }
+    public decimal MinimumOrderValue { get; set; }
+    public int? MaxUses { get; set; }
+    public int Uses { get; set; }
+    public DateTime? ExpiresAt { get; set; }
+    public bool Active { get; set; } = true;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
 public class Order
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid RestaurantId { get; set; }
     public Guid? TableId { get; set; }
     public Guid? UserId { get; set; }
+    public Guid? CustomerId { get; set; }
     public string? CustomerName { get; set; }
     public string Status { get; set; } = "OPEN";
     public string? PaymentMethod { get; set; }
