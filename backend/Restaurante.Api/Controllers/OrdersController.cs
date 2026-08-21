@@ -39,6 +39,13 @@ public class OrdersController(AppDbContext db) : ControllerBase
             if (!tableExists) return BadRequest(new { message = "Mesa inválida para este restaurante." });
         }
 
+        Customer? customer = null;
+        if (req.CustomerId is Guid customerId)
+        {
+            customer = await db.Customers.SingleOrDefaultAsync(x => x.Id == customerId && x.RestaurantId == RestaurantId && x.Active);
+            if (customer is null) return BadRequest(new { message = "Cliente inválido ou inativo." });
+        }
+
         var ids = req.Items.Select(x => x.ProductId).Distinct().ToList();
         var products = await db.Products
             .Where(x => x.RestaurantId == RestaurantId && ids.Contains(x.Id) && x.Active)
@@ -85,7 +92,8 @@ public class OrdersController(AppDbContext db) : ControllerBase
         {
             RestaurantId = RestaurantId,
             TableId = req.TableId,
-            CustomerName = string.IsNullOrWhiteSpace(req.CustomerName) ? null : req.CustomerName.Trim(),
+            CustomerId = customer?.Id,
+            CustomerName = customer?.Name ?? (string.IsNullOrWhiteSpace(req.CustomerName) ? null : req.CustomerName.Trim()),
             Status = "NEW",
             UserId = Guid.TryParse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var uid) ? uid : null
         };
@@ -193,6 +201,28 @@ public class OrdersController(AppDbContext db) : ControllerBase
             PaymentMethod = paymentMethod
         });
 
+        if (order.CustomerId is Guid customerId)
+        {
+            var customer = await db.Customers.SingleOrDefaultAsync(x => x.Id == customerId && x.RestaurantId == RestaurantId && x.Active);
+            if (customer is not null)
+            {
+                var earnedPoints = (int)Math.Floor(order.Total);
+                var earnedCashback = Math.Round(order.Total * 0.02m, 2, MidpointRounding.AwayFromZero);
+                customer.Points += earnedPoints;
+                customer.CashbackBalance += earnedCashback;
+                db.LoyaltyMovements.Add(new LoyaltyMovement
+                {
+                    RestaurantId = RestaurantId,
+                    CustomerId = customer.Id,
+                    OrderId = order.Id,
+                    Type = "EARN",
+                    Points = earnedPoints,
+                    Cashback = earnedCashback,
+                    Description = $"Recompensa do pedido {order.Id}"
+                });
+            }
+        }
+
         if (order.TableId is Guid tid)
         {
             var table = await db.Tables.SingleOrDefaultAsync(x => x.Id == tid && x.RestaurantId == RestaurantId);
@@ -260,7 +290,7 @@ public class OrdersController(AppDbContext db) : ControllerBase
     }
 }
 
-public record CreateOrderRequest(Guid? TableId, string? CustomerName, List<CreateOrderItem> Items);
+public record CreateOrderRequest(Guid? TableId, Guid? CustomerId, string? CustomerName, List<CreateOrderItem> Items);
 public record CreateOrderItem(Guid ProductId, int Quantity, string? Notes);
 public record UpdateOrderStatusRequest(string Status);
 public record CloseOrderRequest(string PaymentMethod);
