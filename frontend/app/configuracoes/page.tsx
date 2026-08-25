@@ -12,7 +12,21 @@ const roleLabel=(r:string)=>({ADMIN:"Administrador",MANAGER:"Gerente",CASHIER:"C
 export default function ConfiguracoesPage(){
  const[settings,setSettings]=useState<RestaurantSettings|null>(null);const[users,setUsers]=useState<User[]>([]);const[message,setMessage]=useState("");const[error,setError]=useState("");const[loading,setLoading]=useState(true);
  const[newName,setNewName]=useState("");const[newEmail,setNewEmail]=useState("");const[newPassword,setNewPassword]=useState("");const[newRole,setNewRole]=useState("WAITER");
- async function api(path:string,options:RequestInit={}){const token=localStorage.getItem("token");if(!token){location.href="/";throw new Error("Sessão expirada.");}const r=await fetch(`${API}${path}`,{...options,headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`}});const text=await r.text();if(!r.ok){try{const d=JSON.parse(text);throw new Error(d.message??text)}catch(e){if(e instanceof Error)throw e;throw new Error(text||"Erro na operação.")}}return text?JSON.parse(text):null}
+ async function api(path:string,options:RequestInit={}){
+  const token=localStorage.getItem("token");
+  if(!token){location.href="/";throw new Error("Sessão expirada. Faça login novamente.");}
+  const r=await fetch(`${API}${path}`,{...options,headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`}});
+  const text=await r.text();
+  if(r.status===401){localStorage.removeItem("token");location.href="/";throw new Error("Sessão expirada. Faça login novamente.");}
+  if(r.status===403)throw new Error("Seu usuário não possui permissão para acessar esta área.");
+  if(!r.ok){
+   let msg=text||`Erro ${r.status} na operação.`;
+   if(text){try{const d=JSON.parse(text);msg=d.message??d.detail??msg}catch{}}
+   throw new Error(msg);
+  }
+  if(!text)return null;
+  try{return JSON.parse(text)}catch{throw new Error("A API retornou uma resposta inválida.")}
+ }
  async function load(){setLoading(true);setError("");try{const[s,u]=await Promise.all([api("/api/restaurant-settings"),api("/api/users")]);setSettings(s);setUsers(u)}catch(e){setError(e instanceof Error?e.message:"Erro ao carregar configurações.")}finally{setLoading(false)}}
  useEffect(()=>{load()},[]);
  function change<K extends keyof RestaurantSettings>(key:K,value:RestaurantSettings[K]){setSettings(s=>s?{...s,[key]:value}:s)}
