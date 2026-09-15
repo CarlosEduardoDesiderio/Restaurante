@@ -12,7 +12,9 @@ public class OrdersController(AppDbContext db) : ControllerBase
     private Guid RestaurantId => Guid.Parse(User.FindFirst("restaurantId")!.Value);
 
     [HttpGet]
+    [Authorize(Roles = "ADMIN,MANAGER,CASHIER,WAITER,KITCHEN")]
     public async Task<IActionResult> Get([FromQuery] string? status) => Ok(await db.Orders
+        .AsNoTracking()
         .Include(x => x.Items)
         .Where(x => x.RestaurantId == RestaurantId && (status == null || x.Status == status))
         .OrderByDescending(x => x.CreatedAt)
@@ -20,23 +22,27 @@ public class OrdersController(AppDbContext db) : ControllerBase
         .ToListAsync());
 
     [HttpGet("{id:guid}")]
+    [Authorize(Roles = "ADMIN,MANAGER,CASHIER,WAITER,KITCHEN")]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var order = await db.Orders.Include(x => x.Items)
+        var order = await db.Orders.AsNoTracking().Include(x => x.Items)
             .SingleOrDefaultAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
         return order is null ? NotFound() : Ok(order);
     }
 
     [HttpPost]
+    [Authorize(Roles = "ADMIN,MANAGER,CASHIER,WAITER")]
     public async Task<IActionResult> Create(CreateOrderRequest req)
     {
-        if (req.Items.Count == 0 || req.Items.Any(x => x.Quantity <= 0))
+        if (req.Items is null || req.Items.Count == 0 || req.Items.Any(x => x.Quantity <= 0))
             return BadRequest(new { message = "Itens inválidos." });
 
         if (req.TableId is Guid tableId)
         {
-            var tableExists = await db.Tables.AnyAsync(x => x.Id == tableId && x.RestaurantId == RestaurantId);
-            if (!tableExists) return BadRequest(new { message = "Mesa inválida para este restaurante." });
+            var table = await db.Tables.SingleOrDefaultAsync(x => x.Id == tableId && x.RestaurantId == RestaurantId);
+            if (table is null) return BadRequest(new { message = "Mesa inválida para este restaurante." });
+            if (table.Status is "DISABLED" or "RESERVED")
+                return Conflict(new { message = "A mesa selecionada não está disponível para abertura de pedido." });
         }
 
         Customer? customer = null;
@@ -139,8 +145,12 @@ public class OrdersController(AppDbContext db) : ControllerBase
     }
 
     [HttpPatch("{id:guid}/status")]
+    [Authorize(Roles = "ADMIN,MANAGER,WAITER,KITCHEN")]
     public async Task<IActionResult> UpdateStatus(Guid id, UpdateOrderStatusRequest req)
     {
+        if (string.IsNullOrWhiteSpace(req.Status))
+            return BadRequest(new { message = "Informe o novo status do pedido." });
+
         var order = await db.Orders.SingleOrDefaultAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
         if (order is null) return NotFound();
         if (order.Status is "CLOSED" or "CANCELLED")
@@ -159,14 +169,24 @@ public class OrdersController(AppDbContext db) : ControllerBase
         if (allowedNext is null || requested != allowedNext)
             return BadRequest(new { message = $"Transição inválida. Status atual: {current}. Próximo status permitido: {allowedNext ?? "nenhum"}." });
 
+        var role = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
+        if (role == "KITCHEN" && requested == "DELIVERED")
+            return Forbid();
+        if (role == "WAITER" && requested is "PREPARING" or "READY")
+            return Forbid();
+
         order.Status = requested;
         await db.SaveChangesAsync();
         return Ok(order);
     }
 
     [HttpPost("{id:guid}/close")]
+    [Authorize(Roles = "ADMIN,MANAGER,CASHIER")]
     public async Task<IActionResult> Close(Guid id, CloseOrderRequest req)
     {
+        if (string.IsNullOrWhiteSpace(req.PaymentMethod))
+            return BadRequest(new { message = "Informe a forma de pagamento." });
+
         var order = await db.Orders.Include(x => x.Items)
             .SingleOrDefaultAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
         if (order is null) return NotFound();
@@ -198,14 +218,10 @@ public class OrdersController(AppDbContext db) : ControllerBase
         {
             var code = req.CouponCode.Trim().ToUpperInvariant();
             coupon = await db.Coupons.SingleOrDefaultAsync(x => x.RestaurantId == RestaurantId && x.Code == code);
-            if (coupon is null || !coupon.Active)
-                return BadRequest(new { message = "Cupom inválido ou inativo." });
-            if (coupon.ExpiresAt is DateTime expiresAt && expiresAt < DateTime.UtcNow)
-                return BadRequest(new { message = "Este cupom está expirado." });
-            if (coupon.MaxUses is int maxUses && coupon.Uses >= maxUses)
-                return BadRequest(new { message = "Este cupom atingiu o limite de usos." });
-            if (originalTotal < coupon.MinimumOrderValue)
-                return BadRequest(new { message = $"Pedido mínimo para este cupom: R$ {coupon.MinimumOrderValue:N2}." });
+            if (coupon is null || !coupon.Active) return BadRequest(new { message = "Cupom inválido ou inativo." });
+            if (coupon.ExpiresAt is DateTime expiresAt && expiresAt < DateTime.UtcNow) return BadRequest(new { message = "Este cupom está expirado." });
+            if (coupon.MaxUses is int maxUses && coupon.Uses >= maxUses) return BadRequest(new { message = "Este cupom atingiu o limite de usos." });
+            if (originalTotal < coupon.MinimumOrderValue) return BadRequest(new { message = $"Pedido mínimo para este cupom: R$ {coupon.MinimumOrderValue:N2}." });
 
             discountAmount = coupon.DiscountType == "PERCENT"
                 ? Math.Round(originalTotal * (coupon.Value / 100m), 2, MidpointRounding.AwayFromZero)
@@ -216,18 +232,14 @@ public class OrdersController(AppDbContext db) : ControllerBase
         var afterCoupon = Math.Max(0, originalTotal - discountAmount);
         var requestedCashback = Math.Max(0, req.CashbackAmount ?? 0);
         var cashbackUsed = 0m;
-
         if (requestedCashback > 0)
         {
-            if (customer is null)
-                return BadRequest(new { message = "Cashback só pode ser usado em pedidos vinculados a um cliente." });
-            if (requestedCashback > customer.CashbackBalance)
-                return BadRequest(new { message = $"Saldo de cashback insuficiente. Disponível: R$ {customer.CashbackBalance:N2}." });
+            if (customer is null) return BadRequest(new { message = "Cashback só pode ser usado em pedidos vinculados a um cliente." });
+            if (requestedCashback > customer.CashbackBalance) return BadRequest(new { message = $"Saldo de cashback insuficiente. Disponível: R$ {customer.CashbackBalance:N2}." });
             cashbackUsed = Math.Min(afterCoupon, requestedCashback);
         }
 
         var amountToPay = Math.Max(0, afterCoupon - cashbackUsed);
-
         await using var transaction = await db.Database.BeginTransactionAsync();
 
         order.OriginalTotal = originalTotal;
@@ -240,33 +252,22 @@ public class OrdersController(AppDbContext db) : ControllerBase
         order.PaymentMethod = paymentMethod;
         order.ClosedAt = DateTime.UtcNow;
 
-        if (coupon is not null)
-            coupon.Uses += 1;
-
+        if (coupon is not null) coupon.Uses += 1;
         if (customer is not null && cashbackUsed > 0)
         {
             customer.CashbackBalance -= cashbackUsed;
             db.LoyaltyMovements.Add(new LoyaltyMovement
             {
-                RestaurantId = RestaurantId,
-                CustomerId = customer.Id,
-                OrderId = order.Id,
-                Type = "REDEEM",
-                Points = 0,
-                Cashback = -cashbackUsed,
-                Description = $"Cashback utilizado no pedido {order.Id}"
+                RestaurantId = RestaurantId, CustomerId = customer.Id, OrderId = order.Id, Type = "REDEEM",
+                Points = 0, Cashback = -cashbackUsed, Description = $"Cashback utilizado no pedido {order.Id}"
             });
         }
 
         db.CashMovements.Add(new CashMovement
         {
-            RestaurantId = RestaurantId,
-            CashSessionId = cashSession.Id,
-            OrderId = order.Id,
-            Type = "IN",
+            RestaurantId = RestaurantId, CashSessionId = cashSession.Id, OrderId = order.Id, Type = "IN",
             Description = $"Pagamento do pedido {order.Id}" + (discountAmount > 0 || cashbackUsed > 0 ? " com benefício CRM" : ""),
-            Amount = amountToPay,
-            PaymentMethod = paymentMethod
+            Amount = amountToPay, PaymentMethod = paymentMethod
         });
 
         if (customer is not null)
@@ -276,50 +277,31 @@ public class OrdersController(AppDbContext db) : ControllerBase
             customer.Points += earnedPoints;
             customer.CashbackBalance += earnedCashback;
             if (earnedPoints > 0 || earnedCashback > 0)
-            {
                 db.LoyaltyMovements.Add(new LoyaltyMovement
                 {
-                    RestaurantId = RestaurantId,
-                    CustomerId = customer.Id,
-                    OrderId = order.Id,
-                    Type = "EARN",
-                    Points = earnedPoints,
-                    Cashback = earnedCashback,
-                    Description = $"Recompensa do pedido {order.Id}"
+                    RestaurantId = RestaurantId, CustomerId = customer.Id, OrderId = order.Id, Type = "EARN",
+                    Points = earnedPoints, Cashback = earnedCashback, Description = $"Recompensa do pedido {order.Id}"
                 });
-            }
         }
 
         if (order.TableId is Guid tid)
         {
             var table = await db.Tables.SingleOrDefaultAsync(x => x.Id == tid && x.RestaurantId == RestaurantId);
-            if (table != null) table.Status = "AVAILABLE";
+            if (table != null) table.Status = "FREE";
         }
 
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
-
         return Ok(new
         {
             order,
-            payment = new
-            {
-                originalTotal,
-                couponCode = coupon?.Code,
-                discountAmount,
-                cashbackUsed,
-                amountPaid = amountToPay,
-                paymentMethod
-            },
-            loyalty = customer is null ? null : new
-            {
-                customer.Points,
-                customer.CashbackBalance
-            }
+            payment = new { originalTotal, couponCode = coupon?.Code, discountAmount, cashbackUsed, amountPaid = amountToPay, paymentMethod },
+            loyalty = customer is null ? null : new { customer.Points, customer.CashbackBalance }
         });
     }
 
     [HttpPost("{id:guid}/cancel")]
+    [Authorize(Roles = "ADMIN,MANAGER,CASHIER,WAITER")]
     public async Task<IActionResult> Cancel(Guid id)
     {
         var order = await db.Orders.SingleOrDefaultAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
@@ -331,26 +313,17 @@ public class OrdersController(AppDbContext db) : ControllerBase
         var restoreStock = order.Status is "NEW" or "OPEN";
         if (restoreStock)
         {
-            var movements = await db.StockMovements
-                .Where(x => x.RestaurantId == RestaurantId && x.OrderId == id && x.Type == "OUT")
-                .ToListAsync();
+            var movements = await db.StockMovements.Where(x => x.RestaurantId == RestaurantId && x.OrderId == id && x.Type == "OUT").ToListAsync();
             var ingredientIds = movements.Select(x => x.IngredientId).Distinct().ToList();
-            var ingredients = await db.Ingredients
-                .Where(x => x.RestaurantId == RestaurantId && ingredientIds.Contains(x.Id))
-                .ToDictionaryAsync(x => x.Id);
-
+            var ingredients = await db.Ingredients.Where(x => x.RestaurantId == RestaurantId && ingredientIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id);
             foreach (var movement in movements)
             {
                 if (!ingredients.TryGetValue(movement.IngredientId, out var ingredient)) continue;
                 ingredient.CurrentQuantity += movement.Quantity;
                 db.StockMovements.Add(new StockMovement
                 {
-                    RestaurantId = RestaurantId,
-                    IngredientId = movement.IngredientId,
-                    OrderId = order.Id,
-                    Type = "RETURN",
-                    Quantity = movement.Quantity,
-                    Description = $"Estorno do pedido {order.Id} antes do preparo"
+                    RestaurantId = RestaurantId, IngredientId = movement.IngredientId, OrderId = order.Id,
+                    Type = "RETURN", Quantity = movement.Quantity, Description = $"Estorno do pedido {order.Id} antes do preparo"
                 });
             }
         }
@@ -359,24 +332,20 @@ public class OrdersController(AppDbContext db) : ControllerBase
         if (order.TableId is Guid tid)
         {
             var table = await db.Tables.SingleOrDefaultAsync(x => x.Id == tid && x.RestaurantId == RestaurantId);
-            if (table != null) table.Status = "AVAILABLE";
+            if (table != null) table.Status = "FREE";
         }
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
 
         return Ok(new
         {
-            order.Id,
-            order.Status,
-            stockRestored = restoreStock,
-            message = restoreStock
-                ? "Pedido cancelado e ingredientes devolvidos ao estoque."
-                : "Pedido cancelado sem estorno de estoque, pois o preparo já havia iniciado."
+            order.Id, order.Status, stockRestored = restoreStock,
+            message = restoreStock ? "Pedido cancelado e ingredientes devolvidos ao estoque." : "Pedido cancelado sem estorno de estoque, pois o preparo já havia iniciado."
         });
     }
 }
 
-public record CreateOrderRequest(Guid? TableId, Guid? CustomerId, string? CustomerName, List<CreateOrderItem> Items);
+public record CreateOrderRequest(Guid? TableId, Guid? CustomerId, string? CustomerName, List<CreateOrderItem>? Items);
 public record CreateOrderItem(Guid ProductId, int Quantity, string? Notes);
-public record UpdateOrderStatusRequest(string Status);
-public record CloseOrderRequest(string PaymentMethod, string? CouponCode = null, decimal? CashbackAmount = null);
+public record UpdateOrderStatusRequest(string? Status);
+public record CloseOrderRequest(string? PaymentMethod, string? CouponCode = null, decimal? CashbackAmount = null);
