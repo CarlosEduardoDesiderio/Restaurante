@@ -6,19 +6,23 @@ using Restaurante.Api.Models;
 
 namespace Restaurante.Api.Controllers;
 
-[ApiController, Route("api/recipes"), Authorize]
+[ApiController]
+[Route("api/recipes")]
+[Authorize]
 public class RecipesController(AppDbContext db) : ControllerBase
 {
     private Guid RestaurantId => Guid.Parse(User.FindFirst("restaurantId")!.Value);
 
     [HttpGet("{productId:guid}")]
+    [Authorize(Roles = "ADMIN,MANAGER,CASHIER,KITCHEN")]
     public async Task<IActionResult> Get(Guid productId)
     {
-        var product = await db.Products.SingleOrDefaultAsync(x => x.Id == productId && x.RestaurantId == RestaurantId);
-        if (product is null) return NotFound();
+        var product = await db.Products.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == productId && x.RestaurantId == RestaurantId);
+        if (product is null) return NotFound(new { message = "Produto não encontrado." });
 
-        var recipe = await (from r in db.Recipes
-                            join i in db.Ingredients on r.IngredientId equals i.Id
+        var recipe = await (from r in db.Recipes.AsNoTracking()
+                            join i in db.Ingredients.AsNoTracking() on r.IngredientId equals i.Id
                             where r.ProductId == productId && i.RestaurantId == RestaurantId
                             orderby i.Name
                             select new { r.IngredientId, i.Name, i.Unit, r.Quantity, i.CostPerUnit })
@@ -35,10 +39,12 @@ public class RecipesController(AppDbContext db) : ControllerBase
     }
 
     [HttpPut("{productId:guid}")]
+    [Authorize(Roles = "ADMIN,MANAGER")]
     public async Task<IActionResult> Save(Guid productId, SaveRecipeRequest request)
     {
         var productExists = await db.Products.AnyAsync(x => x.Id == productId && x.RestaurantId == RestaurantId);
-        if (!productExists) return NotFound();
+        if (!productExists) return NotFound(new { message = "Produto não encontrado." });
+        if (request.Items is null) return BadRequest(new { message = "Informe os itens da ficha técnica." });
         if (request.Items.Any(x => x.Quantity <= 0)) return BadRequest(new { message = "A quantidade deve ser maior que zero." });
 
         var ingredientIds = request.Items.Select(x => x.IngredientId).Distinct().ToList();
@@ -49,7 +55,9 @@ public class RecipesController(AppDbContext db) : ControllerBase
         if (validCount != ingredientIds.Count)
             return BadRequest(new { message = "A ficha técnica contém ingrediente inválido." });
 
-        var old = await db.Recipes.Where(x => x.ProductId == productId).ToListAsync();
+        var old = await db.Recipes
+            .Where(x => x.ProductId == productId && ingredientIds.Count >= 0)
+            .ToListAsync();
         db.Recipes.RemoveRange(old);
         db.Recipes.AddRange(request.Items.Select(x => new Recipe
         {
