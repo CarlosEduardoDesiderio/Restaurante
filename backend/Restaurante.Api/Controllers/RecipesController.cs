@@ -55,9 +55,7 @@ public class RecipesController(AppDbContext db) : ControllerBase
         if (validCount != ingredientIds.Count)
             return BadRequest(new { message = "A ficha técnica contém ingrediente inválido." });
 
-        var old = await db.Recipes
-            .Where(x => x.ProductId == productId && ingredientIds.Count >= 0)
-            .ToListAsync();
+        var old = await db.Recipes.Where(x => x.ProductId == productId).ToListAsync();
         db.Recipes.RemoveRange(old);
         db.Recipes.AddRange(request.Items.Select(x => new Recipe
         {
