@@ -22,15 +22,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-
       - name: Restore
         run: dotnet restore
-
       - name: Build
         run: dotnet build --configuration Release --no-restore
 
@@ -59,22 +56,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-
       - name: Build API
         working-directory: backend/Restaurante.Api
         run: dotnet build --configuration Release
-
       - name: Start API
         working-directory: backend/Restaurante.Api
         run: |
           nohup dotnet run --configuration Release --no-build > /tmp/restaurante-api.log 2>&1 &
           echo $! > /tmp/restaurante-api.pid
-
       - name: Wait for health endpoint
         run: |
           for i in {1..40}; do
@@ -86,7 +79,6 @@ jobs:
           done
           cat /tmp/restaurante-api.log || true
           exit 1
-
       - name: Login and validate protected endpoints
         shell: bash
         run: |
@@ -99,7 +91,7 @@ jobs:
           test -n "$TOKEN"
           curl --fail --silent -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5000/api/products > /tmp/products.json
           curl --fail --silent -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5000/api/tables > /tmp/tables.json
-          curl --fail --silent -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5000/api/dashboard > /tmp/dashboard.json
+          curl --fail --silent -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5000/api/dashboard/summary > /tmp/dashboard.json
           curl --fail --silent -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
             -d '{"question":"Como está meu estoque?"}' http://127.0.0.1:5000/api/ai/ask > /tmp/ai.json
           python3 - <<'PY'
@@ -109,12 +101,10 @@ jobs:
                   json.load(f)
           print('API smoke tests passed')
           PY
-
       - name: Verify authentication is required
         run: |
           STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:5000/api/products)
           test "$STATUS" = "401"
-
       - name: Show API log on failure
         if: failure()
         run: cat /tmp/restaurante-api.log || true
@@ -128,16 +118,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
       - name: Install dependencies
         run: npm ci
-
       - name: Build
         run: npm run build
