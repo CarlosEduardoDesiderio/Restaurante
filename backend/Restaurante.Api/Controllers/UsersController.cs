@@ -19,7 +19,7 @@ public class UsersController(AppDbContext db) : ControllerBase
     [HttpGet]
     public async Task<IActionResult> List()
     {
-        var users = await db.Users
+        var users = await db.Users.AsNoTracking()
             .Where(x => x.RestaurantId == RestaurantId)
             .OrderBy(x => x.Name)
             .Select(x => new { x.Id, x.Name, x.Email, x.Role, x.Active })
@@ -66,6 +66,15 @@ public class UsersController(AppDbContext db) : ControllerBase
         if (role is null || !AllowedRoles.Contains(role)) return BadRequest(new { message = "Perfil inválido." });
         if (id == CurrentUserId && !req.Active) return BadRequest(new { message = "Você não pode desativar seu próprio usuário." });
         if (id == CurrentUserId && role != "ADMIN") return BadRequest(new { message = "Você não pode remover seu próprio perfil de administrador." });
+
+        var removesActiveAdmin = user.Active && user.Role == "ADMIN" && (!req.Active || role != "ADMIN");
+        if (removesActiveAdmin)
+        {
+            var otherActiveAdmins = await db.Users.CountAsync(x =>
+                x.RestaurantId == RestaurantId && x.Id != id && x.Active && x.Role == "ADMIN");
+            if (otherActiveAdmins == 0)
+                return BadRequest(new { message = "O restaurante precisa manter pelo menos um administrador ativo." });
+        }
 
         user.Name = req.Name.Trim();
         user.Role = role;
