@@ -7,7 +7,9 @@ using System.Security.Claims;
 
 namespace Restaurante.Api.Controllers;
 
-[ApiController, Route("api/cash"), Authorize]
+[ApiController]
+[Route("api/cash")]
+[Authorize(Roles = "ADMIN,MANAGER,CASHIER")]
 public class CashController(AppDbContext db) : ControllerBase
 {
     private Guid RestaurantId => Guid.Parse(User.FindFirst("restaurantId")!.Value);
@@ -16,7 +18,7 @@ public class CashController(AppDbContext db) : ControllerBase
     [HttpGet("current")]
     public async Task<IActionResult> Current()
     {
-        var session = await db.CashSessions
+        var session = await db.CashSessions.AsNoTracking()
             .Where(x => x.RestaurantId == RestaurantId && x.Status == "OPEN")
             .OrderByDescending(x => x.OpenedAt)
             .FirstOrDefaultAsync();
@@ -26,7 +28,7 @@ public class CashController(AppDbContext db) : ControllerBase
     }
 
     [HttpGet("history")]
-    public async Task<IActionResult> History() => Ok(await db.CashSessions
+    public async Task<IActionResult> History() => Ok(await db.CashSessions.AsNoTracking()
         .Where(x => x.RestaurantId == RestaurantId)
         .OrderByDescending(x => x.OpenedAt)
         .Take(50)
@@ -35,9 +37,9 @@ public class CashController(AppDbContext db) : ControllerBase
     [HttpGet("{id:guid}/movements")]
     public async Task<IActionResult> Movements(Guid id)
     {
-        var exists = await db.CashSessions.AnyAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
+        var exists = await db.CashSessions.AsNoTracking().AnyAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
         if (!exists) return NotFound();
-        return Ok(await db.CashMovements
+        return Ok(await db.CashMovements.AsNoTracking()
             .Where(x => x.RestaurantId == RestaurantId && x.CashSessionId == id)
             .OrderByDescending(x => x.CreatedAt)
             .ToListAsync());
@@ -51,7 +53,6 @@ public class CashController(AppDbContext db) : ControllerBase
         if (alreadyOpen) return Conflict(new { message = "Já existe um caixa aberto para este restaurante." });
 
         await using var transaction = await db.Database.BeginTransactionAsync();
-
         var session = new CashSession
         {
             RestaurantId = RestaurantId,
@@ -59,9 +60,6 @@ public class CashController(AppDbContext db) : ControllerBase
             OpeningAmount = req.OpeningAmount,
             Status = "OPEN"
         };
-
-        // Persiste a sessão antes de qualquer movimento que a referencie.
-        // Isso evita violação da FK cash_movements_cash_session_id_fkey.
         db.CashSessions.Add(session);
         await db.SaveChangesAsync();
 
@@ -69,12 +67,8 @@ public class CashController(AppDbContext db) : ControllerBase
         {
             db.CashMovements.Add(new CashMovement
             {
-                RestaurantId = RestaurantId,
-                CashSessionId = session.Id,
-                Type = "OPENING",
-                Description = "Abertura de caixa",
-                Amount = req.OpeningAmount,
-                PaymentMethod = "CASH"
+                RestaurantId = RestaurantId, CashSessionId = session.Id, Type = "OPENING",
+                Description = "Abertura de caixa", Amount = req.OpeningAmount, PaymentMethod = "CASH"
             });
             await db.SaveChangesAsync();
         }
@@ -92,12 +86,9 @@ public class CashController(AppDbContext db) : ControllerBase
 
         db.CashMovements.Add(new CashMovement
         {
-            RestaurantId = RestaurantId,
-            CashSessionId = session.Id,
-            Type = "SUPPLY",
+            RestaurantId = RestaurantId, CashSessionId = session.Id, Type = "SUPPLY",
             Description = string.IsNullOrWhiteSpace(req.Description) ? "Suprimento de caixa" : req.Description.Trim(),
-            Amount = req.Amount,
-            PaymentMethod = "CASH"
+            Amount = req.Amount, PaymentMethod = "CASH"
         });
         await db.SaveChangesAsync();
         return Ok(await BuildSummary(session));
@@ -116,12 +107,9 @@ public class CashController(AppDbContext db) : ControllerBase
 
         db.CashMovements.Add(new CashMovement
         {
-            RestaurantId = RestaurantId,
-            CashSessionId = session.Id,
-            Type = "WITHDRAWAL",
+            RestaurantId = RestaurantId, CashSessionId = session.Id, Type = "WITHDRAWAL",
             Description = string.IsNullOrWhiteSpace(req.Description) ? "Sangria de caixa" : req.Description.Trim(),
-            Amount = req.Amount,
-            PaymentMethod = "CASH"
+            Amount = req.Amount, PaymentMethod = "CASH"
         });
         await db.SaveChangesAsync();
         return Ok(await BuildSummary(session));
@@ -141,24 +129,14 @@ public class CashController(AppDbContext db) : ControllerBase
         session.ExpectedCashAmount = data.ExpectedCash;
         session.CountedCashAmount = req.CountedCashAmount;
         session.DifferenceAmount = req.CountedCashAmount - data.ExpectedCash;
-
         await db.SaveChangesAsync();
+
         return Ok(new
         {
-            session.Id,
-            session.Status,
-            session.OpenedAt,
-            session.ClosedAt,
-            session.OpeningAmount,
-            expectedCash = data.ExpectedCash,
-            countedCash = session.CountedCashAmount,
-            difference = session.DifferenceAmount,
-            data.Pix,
-            data.Card,
-            data.CashSales,
-            data.TotalSales,
-            data.Supplies,
-            data.Withdrawals
+            session.Id, session.Status, session.OpenedAt, session.ClosedAt, session.OpeningAmount,
+            expectedCash = data.ExpectedCash, countedCash = session.CountedCashAmount,
+            difference = session.DifferenceAmount, data.Pix, data.Card, data.CashSales,
+            data.TotalSales, data.Supplies, data.Withdrawals
         });
     }
 
@@ -172,28 +150,17 @@ public class CashController(AppDbContext db) : ControllerBase
         var data = await BuildSummaryData(session);
         return new
         {
-            open = true,
-            session.Id,
-            session.Status,
-            session.OpenedAt,
-            session.OpeningAmount,
-            expectedCash = data.ExpectedCash,
-            data.Pix,
-            data.Card,
-            data.CashSales,
-            data.TotalSales,
-            data.Supplies,
-            data.Withdrawals,
-            movements = data.MovementCount
+            open = true, session.Id, session.Status, session.OpenedAt, session.OpeningAmount,
+            expectedCash = data.ExpectedCash, data.Pix, data.Card, data.CashSales, data.TotalSales,
+            data.Supplies, data.Withdrawals, movements = data.MovementCount
         };
     }
 
     private async Task<CashSummaryData> BuildSummaryData(CashSession session)
     {
-        var movements = await db.CashMovements
+        var movements = await db.CashMovements.AsNoTracking()
             .Where(x => x.RestaurantId == RestaurantId && x.CashSessionId == session.Id)
             .ToListAsync();
-
         var sales = movements.Where(x => x.Type == "IN").ToList();
         var cashSales = sales.Where(x => x.PaymentMethod == "CASH").Sum(x => x.Amount);
         var pix = sales.Where(x => x.PaymentMethod == "PIX").Sum(x => x.Amount);
@@ -201,7 +168,6 @@ public class CashController(AppDbContext db) : ControllerBase
         var supplies = movements.Where(x => x.Type == "SUPPLY").Sum(x => x.Amount);
         var withdrawals = movements.Where(x => x.Type == "WITHDRAWAL").Sum(x => x.Amount);
         var expectedCash = session.OpeningAmount + cashSales + supplies - withdrawals;
-
         return new CashSummaryData(expectedCash, pix, card, cashSales, sales.Sum(x => x.Amount), supplies, withdrawals, movements.Count);
     }
 }
