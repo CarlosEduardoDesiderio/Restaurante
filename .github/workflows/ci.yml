@@ -34,6 +34,91 @@ jobs:
       - name: Build
         run: dotnet build --configuration Release --no-restore
 
+  api-smoke:
+    name: API + PostgreSQL smoke tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: restaurante_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d restaurante_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://127.0.0.1:5000
+      ConnectionStrings__Default: Host=127.0.0.1;Port=5432;Database=restaurante_ci;Username=postgres;Password=postgres_ci
+      Jwt__Key: ci-only-jwt-key-with-more-than-32-characters-2026
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build API
+        working-directory: backend/Restaurante.Api
+        run: dotnet build --configuration Release
+
+      - name: Start API
+        working-directory: backend/Restaurante.Api
+        run: |
+          nohup dotnet run --configuration Release --no-build > /tmp/restaurante-api.log 2>&1 &
+          echo $! > /tmp/restaurante-api.pid
+
+      - name: Wait for health endpoint
+        run: |
+          for i in {1..40}; do
+            if curl --fail --silent http://127.0.0.1:5000/health > /tmp/health.json; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/restaurante-api.log || true
+          exit 1
+
+      - name: Login and validate protected endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOGIN_RESPONSE=$(curl --fail --silent \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"admin@demo.local","password":"Admin@123"}' \
+            http://127.0.0.1:5000/api/auth/login)
+          TOKEN=$(printf '%s' "$LOGIN_RESPONSE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          test -n "$TOKEN"
+          curl --fail --silent -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5000/api/products > /tmp/products.json
+          curl --fail --silent -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5000/api/tables > /tmp/tables.json
+          curl --fail --silent -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5000/api/dashboard > /tmp/dashboard.json
+          curl --fail --silent -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+            -d '{"question":"Como está meu estoque?"}' http://127.0.0.1:5000/api/ai/ask > /tmp/ai.json
+          python3 - <<'PY'
+          import json
+          for path in ['/tmp/products.json','/tmp/tables.json','/tmp/dashboard.json','/tmp/ai.json']:
+              with open(path, encoding='utf-8') as f:
+                  json.load(f)
+          print('API smoke tests passed')
+          PY
+
+      - name: Verify authentication is required
+        run: |
+          STATUS=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:5000/api/products)
+          test "$STATUS" = "401"
+
+      - name: Show API log on failure
+        if: failure()
+        run: cat /tmp/restaurante-api.log || true
+
   frontend-build:
     name: Frontend Next.js
     runs-on: ubuntu-latest
