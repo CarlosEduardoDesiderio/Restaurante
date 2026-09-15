@@ -6,7 +6,9 @@ using Restaurante.Api.Models;
 
 namespace Restaurante.Api.Controllers;
 
-[ApiController, Route("api/financial"), Authorize]
+[ApiController]
+[Route("api/financial")]
+[Authorize(Roles = "ADMIN,MANAGER")]
 public class FinancialController(AppDbContext db) : ControllerBase
 {
     private Guid RestaurantId => Guid.Parse(User.FindFirst("restaurantId")!.Value);
@@ -33,9 +35,16 @@ public class FinancialController(AppDbContext db) : ControllerBase
     public async Task<IActionResult> Entries([FromQuery] string? type, [FromQuery] string? status)
     {
         await EnsureTable();
-        var query = db.FinancialEntries.Where(x => x.RestaurantId == RestaurantId);
-        if (!string.IsNullOrWhiteSpace(type)) query = query.Where(x => x.Type == type.ToUpper());
-        if (!string.IsNullOrWhiteSpace(status)) query = query.Where(x => x.Status == status.ToUpper());
+        var normalizedType = type?.Trim().ToUpperInvariant();
+        var normalizedStatus = status?.Trim().ToUpperInvariant();
+        if (normalizedType is not null && normalizedType is not ("PAYABLE" or "RECEIVABLE"))
+            return BadRequest(new { message = "Tipo financeiro inválido." });
+        if (normalizedStatus is not null && normalizedStatus is not ("PENDING" or "PAID"))
+            return BadRequest(new { message = "Status financeiro inválido." });
+
+        var query = db.FinancialEntries.AsNoTracking().Where(x => x.RestaurantId == RestaurantId);
+        if (normalizedType is not null) query = query.Where(x => x.Type == normalizedType);
+        if (normalizedStatus is not null) query = query.Where(x => x.Status == normalizedStatus);
         return Ok(await query.OrderBy(x => x.Status).ThenBy(x => x.DueDate).Take(200).ToListAsync());
     }
 
@@ -43,7 +52,7 @@ public class FinancialController(AppDbContext db) : ControllerBase
     public async Task<IActionResult> Create(CreateFinancialEntryRequest req)
     {
         await EnsureTable();
-        var type = req.Type.Trim().ToUpperInvariant();
+        var type = req.Type?.Trim().ToUpperInvariant();
         if (type is not ("PAYABLE" or "RECEIVABLE")) return BadRequest(new { message = "Tipo inválido. Use PAYABLE ou RECEIVABLE." });
         if (req.Amount <= 0) return BadRequest(new { message = "O valor deve ser maior que zero." });
         if (string.IsNullOrWhiteSpace(req.Description)) return BadRequest(new { message = "Informe uma descrição." });
@@ -68,8 +77,8 @@ public class FinancialController(AppDbContext db) : ControllerBase
     {
         await EnsureTable();
         var entry = await db.FinancialEntries.SingleOrDefaultAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
-        if (entry is null) return NotFound();
-        if (entry.Status == "PAID") return BadRequest(new { message = "Lançamento já liquidado." });
+        if (entry is null) return NotFound(new { message = "Lançamento não encontrado." });
+        if (entry.Status == "PAID") return Conflict(new { message = "Lançamento já liquidado." });
         entry.Status = "PAID";
         entry.PaidAt = DateTime.UtcNow;
         entry.PaymentMethod = string.IsNullOrWhiteSpace(req.PaymentMethod) ? null : req.PaymentMethod.Trim().ToUpperInvariant();
@@ -78,11 +87,13 @@ public class FinancialController(AppDbContext db) : ControllerBase
     }
 
     [HttpDelete("entries/{id:guid}")]
+    [Authorize(Roles = "ADMIN")]
     public async Task<IActionResult> Delete(Guid id)
     {
         await EnsureTable();
         var entry = await db.FinancialEntries.SingleOrDefaultAsync(x => x.Id == id && x.RestaurantId == RestaurantId);
-        if (entry is null) return NotFound();
+        if (entry is null) return NotFound(new { message = "Lançamento não encontrado." });
+        if (entry.Status == "PAID") return Conflict(new { message = "Lançamentos já liquidados não podem ser excluídos." });
         db.FinancialEntries.Remove(entry);
         await db.SaveChangesAsync();
         return NoContent();
@@ -96,23 +107,21 @@ public class FinancialController(AppDbContext db) : ControllerBase
         var endExclusive = (to?.Date.AddDays(1) ?? DateTime.UtcNow.Date.AddDays(1)).ToUniversalTime();
         if (endExclusive <= start) return BadRequest(new { message = "Período inválido." });
 
-        var orders = await db.Orders
+        var orders = await db.Orders.AsNoTracking()
             .Where(x => x.RestaurantId == RestaurantId && x.Status == "CLOSED" && x.ClosedAt >= start && x.ClosedAt < endExclusive)
-            .Select(x => new { x.Id, x.Total, x.PaymentMethod, x.ClosedAt })
-            .ToListAsync();
+            .Select(x => new { x.Id, x.Total, x.PaymentMethod, x.ClosedAt }).ToListAsync();
         var ids = orders.Select(x => x.Id).ToList();
         var revenue = orders.Sum(x => x.Total);
         var cmv = ids.Count == 0 ? 0m : await (
-            from item in db.OrderItems
-            join recipe in db.Recipes on item.ProductId equals recipe.ProductId
-            join ingredient in db.Ingredients on recipe.IngredientId equals ingredient.Id
+            from item in db.OrderItems.AsNoTracking()
+            join recipe in db.Recipes.AsNoTracking() on item.ProductId equals recipe.ProductId
+            join ingredient in db.Ingredients.AsNoTracking() on recipe.IngredientId equals ingredient.Id
             where ids.Contains(item.OrderId) && ingredient.RestaurantId == RestaurantId
             select (decimal?)(item.Quantity * recipe.Quantity * ingredient.CostPerUnit)
         ).SumAsync() ?? 0m;
 
-        var entries = await db.FinancialEntries
-            .Where(x => x.RestaurantId == RestaurantId && x.DueDate >= start && x.DueDate < endExclusive)
-            .ToListAsync();
+        var entries = await db.FinancialEntries.AsNoTracking()
+            .Where(x => x.RestaurantId == RestaurantId && x.DueDate >= start && x.DueDate < endExclusive).ToListAsync();
         var paidExpenses = entries.Where(x => x.Type == "PAYABLE" && x.Status == "PAID").Sum(x => x.Amount);
         var pendingPayables = entries.Where(x => x.Type == "PAYABLE" && x.Status == "PENDING").Sum(x => x.Amount);
         var paidReceivables = entries.Where(x => x.Type == "RECEIVABLE" && x.Status == "PAID").Sum(x => x.Amount);
@@ -120,17 +129,12 @@ public class FinancialController(AppDbContext db) : ControllerBase
         var grossProfit = revenue - cmv;
         var netProfit = grossProfit - paidExpenses;
 
-        var daily = orders.GroupBy(x => x.ClosedAt!.Value.Date)
-            .OrderBy(x => x.Key)
-            .Select(x => new { date = x.Key, revenue = x.Sum(y => y.Total), orders = x.Count() })
-            .ToList();
+        var daily = orders.GroupBy(x => x.ClosedAt!.Value.Date).OrderBy(x => x.Key)
+            .Select(x => new { date = x.Key, revenue = x.Sum(y => y.Total), orders = x.Count() }).ToList();
 
         return Ok(new
         {
-            from = start,
-            to = endExclusive.AddTicks(-1),
-            revenue,
-            orders = orders.Count,
+            from = start, to = endExclusive.AddTicks(-1), revenue, orders = orders.Count,
             averageTicket = orders.Count == 0 ? 0 : revenue / orders.Count,
             payments = new
             {
@@ -138,20 +142,13 @@ public class FinancialController(AppDbContext db) : ControllerBase
                 card = orders.Where(x => x.PaymentMethod == "CARD").Sum(x => x.Total),
                 cash = orders.Where(x => x.PaymentMethod == "CASH").Sum(x => x.Total)
             },
-            cmv,
-            cmvPercentage = revenue == 0 ? 0 : cmv / revenue * 100,
-            grossProfit,
-            grossMarginPercentage = revenue == 0 ? 0 : grossProfit / revenue * 100,
-            paidExpenses,
-            pendingPayables,
-            paidReceivables,
-            pendingReceivables,
-            netProfit,
-            netMarginPercentage = revenue == 0 ? 0 : netProfit / revenue * 100,
-            daily
+            cmv, cmvPercentage = revenue == 0 ? 0 : cmv / revenue * 100,
+            grossProfit, grossMarginPercentage = revenue == 0 ? 0 : grossProfit / revenue * 100,
+            paidExpenses, pendingPayables, paidReceivables, pendingReceivables, netProfit,
+            netMarginPercentage = revenue == 0 ? 0 : netProfit / revenue * 100, daily
         });
     }
 }
 
-public record CreateFinancialEntryRequest(string Type, string Category, string Description, decimal Amount, DateTime DueDate);
+public record CreateFinancialEntryRequest(string? Type, string? Category, string? Description, decimal Amount, DateTime DueDate);
 public record PayFinancialEntryRequest(string? PaymentMethod);
